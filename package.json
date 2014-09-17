@@ -1,0 +1,27 @@
+{
+  "name": "browserify-mustache",
+  "version": "0.0.0",
+  "description": "Browserify transform plugin for mustache templates",
+  "main": "index.js",
+  "scripts": {
+    "test": "browserify -t ./ test/test.js > test/result.js && node test/result.js"
+  },
+  "keywords": [
+    "browserify",
+    "mustache",
+    "transform",
+    "browserify-transform"
+  ],
+  "author": "Hashan Punchihewa <hashan.punchihewa@gmail.com>",
+  "license": "BSD-2-Clause",
+  "peerDependencies": {
+    "hogan.js": "*"
+  },
+  "dependencies": {
+    "through": "~2.3.4"
+  },
+  "devDependencies": {
+    "hogan.js": "~3.0.2",
+    "techhead-hogan": "0.0.1"
+  }
+}
