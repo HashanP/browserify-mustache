@@ -22,7 +22,8 @@
       rNewline =  /\n/g,
       rCr = /\r/g,
       rSlash = /\\/g,
-      rSpecial = /[\.\|]/; // dot or pipe
+      rLineSep = /\u2028/,
+      rParagraphSep = /\u2029/;
 
   Hogan.tags = {
     '#': 1, '^': 2, '<': 3, '$': 4,
@@ -96,7 +97,7 @@
           ).split(' ');
 
       otag = delimiters[0];
-      ctag = delimiters[1];
+      ctag = delimiters[delimiters.length - 1];
 
       return closeIndex + close.length - 1;
     }
@@ -213,7 +214,7 @@
           throw new Error('Closing tag without opener: /' + token.n);
         }
         opener = stack.pop();
-        if (token.n && token.n != opener.n && !isCloser(token.n, opener.n, customTags)) {
+        if (token.n != opener.n && !isCloser(token.n, opener.n, customTags)) {
           throw new Error('Nesting error: ' + opener.n + ' vs. ' + token.n);
         }
         opener.end = token.i;
@@ -309,11 +310,13 @@
     return s.replace(rSlash, '\\\\')
             .replace(rQuot, '\\\"')
             .replace(rNewline, '\\n')
-            .replace(rCr, '\\r');
+            .replace(rCr, '\\r')
+            .replace(rLineSep, '\\u2028')
+            .replace(rParagraphSep, '\\u2029');
   }
 
   function chooseMethod(s) {
-    return rSpecial.test(s) ? 'd' : 'f';
+    return (~s.indexOf('.')) ? 'd' : 'f';
   }
 
   function createPartial(node, context) {
@@ -399,14 +402,7 @@
   Hogan.cache = {};
 
   Hogan.cacheKey = function(text, options) {
-    return [
-      text,
-      options.delimiters || '{{ }}',
-      !!options.asString,
-      !!options.disableLambda,
-      !!options.fixMethodCalls,
-      !!options.enableHelpers
-    ].join('||');
+    return [text, !!options.asString, !!options.disableLambda, options.delimiters, !!options.modelGet].join('||');
   }
 
   Hogan.compile = function(text, options) {
@@ -415,6 +411,10 @@
     var template = this.cache[key];
 
     if (template) {
+      var partials = template.partials;
+      for (var name in partials) {
+        delete partials[name].instance;
+      }
       return template;
     }
 
@@ -464,16 +464,16 @@ module.exports = Hogan;
 
 var Hogan = {};
 
-(function (Hogan, useArrayBuffer) {
+(function (Hogan) {
   Hogan.Template = function (codeObj, text, compiler, options) {
     codeObj = codeObj || {};
     this.r = codeObj.code || this.r;
     this.c = compiler;
-    this.options = options;
+    this.options = options || {};
     this.text = text || '';
     this.partials = codeObj.partials || {};
     this.subs = codeObj.subs || {};
-    this.ib();
+    this.buf = '';
   }
 
   Hogan.Template.prototype = {
@@ -521,13 +521,17 @@ var Hogan = {};
 
       if (partial.subs) {
         // Make sure we consider parent template now
-        if (this.activeSub === undefined) {
-          // Store parent template text in partials.stackText to perform substitutions in child templates correctly
-          partials.stackText  = this.text;
+        if (!partials.stackText) partials.stackText = {};
+        for (key in partial.subs) {
+          if (!partials.stackText[key]) {
+            partials.stackText[key] = (this.activeSub !== undefined && partials.stackText[this.activeSub]) ? partials.stackText[this.activeSub] : this.text;
+          }
         }
-         template = createSpecializedPartial(template, partial.subs, partial.partials, partials.stackText || this.text);
-       }
+        template = createSpecializedPartial(template, partial.subs, partial.partials,
+          this.stackSubs, this.stackPartials, partials.stackText);
+      }
       this.partials[symbol].instance = template;
+
       return template;
     },
 
@@ -551,7 +555,6 @@ var Hogan = {};
       }
 
       for (var i = 0; i < tail.length; i++) {
-        tail.currentIndex = i;
         context.push(tail[i]);
         section(context, partials, this);
         context.pop();
@@ -567,10 +570,10 @@ var Hogan = {};
       }
 
       if (typeof val == 'function') {
-        val = inverted || this.ms(val, ctx, partials, start, end, tags);
+        val = this.ms(val, ctx, partials, inverted, start, end, tags);
       }
 
-      pass = (val === '') || !!val;
+      pass = !!val;
 
       if (!inverted && pass && ctx) {
         ctx.push((typeof val == 'object') ? val : ctx[ctx.length - 1]);
@@ -579,86 +582,52 @@ var Hogan = {};
       return pass;
     },
 
-    // find values with dotted names, piped helpers or both
-    d: function(key, ctx, partials, returnFound, cx) {
-      var val;
-
-      // Piped helpers
-      if (this.options.enableHelpers && typeof cx == 'undefined' && key.indexOf('|') > 0) {
-        var names = key.split(rPipe);
-        val = cx = ctx[ctx.length - 1];
-        for (var i = 0; i < names.length; i++) {
-          val = this.d(names[i], ctx, partials, (i === names.length - 1) ? returnFound : 1, val);
-        }
-        return val;
-      }
+    // find values with dotted names
+    d: function(key, ctx, partials, returnFound) {
+      var found,
+          names = key.split('.'),
+          val = this.f(names[0], ctx, partials, returnFound),
+          doModelGet = this.options.modelGet,
+          cx = null;
 
       if (key === '.' && isArray(ctx[ctx.length - 2])) {
-
         val = ctx[ctx.length - 1];
-        if (!this.options.fixMethodCalls && typeof val == 'function') {
-          // Needed in order to pass the test: Implicit iterator lambda evaluation
-          val = val.call(null);
-        }
-
       } else {
-
-        var names = key.split('.');
-        val = this.f(names[0], ctx, partials, returnFound, cx);
         for (var i = 1; i < names.length; i++) {
-          if (val && typeof val == 'object' && val[names[i]] != null) {
-            var v = val;
-            val = val[names[i]];
-
-            if (typeof val == 'function') {
-
-              if (typeof cx == 'undefined') cx = ctx[ctx.length - 1];
-
-              if (ctx.length > 1 && isArray(ctx[ctx.length - 2])) {
-                var arr = ctx[ctx.length - 2];
-                val = val.call(v, cx, arr.currentIndex, arr);
-              } else {
-                val = val.call(v, cx);
-              }
-            }
-
+          found = findInScope(names[i], val, doModelGet);
+          if (found !== undefined) {
+            cx = val;
+            val = found;
           } else {
-            val = (returnFound) ? false : "";
-            break;
+            val = '';
           }
         }
       }
 
+      if (returnFound && !val) {
+        return false;
+      }
+
       if (!returnFound && typeof val == 'function') {
+        ctx.push(cx);
         val = this.mv(val, ctx, partials);
+        ctx.pop();
       }
 
       return val;
     },
 
     // find values with normal names
-    f: function(key, ctx, partials, returnFound, cx) {
+    f: function(key, ctx, partials, returnFound) {
       var val = false,
           v = null,
-          found = false;
+          found = false,
+          doModelGet = this.options.modelGet;
 
       for (var i = ctx.length - 1; i >= 0; i--) {
         v = ctx[i];
-        if (v && typeof v == 'object' && v[key] != null) {
-          val = v[key];
-
-          if (typeof val == 'function') {
-
-            if (typeof cx == 'undefined') cx = ctx[ctx.length - 1];
-
-            if (ctx.length > 1 && isArray(ctx[ctx.length - 2])) {
-              var arr = ctx[ctx.length - 2];
-              val = val.call(this.options.fixMethodCalls ? v : cx, cx, arr.currentIndex, arr);
-            } else {
-              val = val.call(this.options.fixMethodCalls ? v : cx, cx);
-            }
-          }
-
+        val = findInScope(key, v, doModelGet);
+        if (val !== undefined) {
           found = true;
           break;
         }
@@ -676,46 +645,57 @@ var Hogan = {};
     },
 
     // higher order templates
-    ls: function(func, ctx, partials, text, tags) {
-      var oldTags = this.options.delimiters,
-          cx = ctx[ctx.length - 1];
+    ls: function(func, cx, partials, text, tags) {
+      var oldTags = this.options.delimiters;
 
       this.options.delimiters = tags;
-      this.b(this.ct(coerceToString(func.call(cx, text)), ctx, partials));
+      this.b(this.ct(coerceToString(func.call(cx, text)), cx, partials));
       this.options.delimiters = oldTags;
 
       return false;
     },
 
     // compile text
-    ct: function(text, ctx, partials) {
+    ct: function(text, cx, partials) {
       if (this.options.disableLambda) {
         throw new Error('Lambda features disabled.');
       }
-      return this.c.compile(text, this.options).ri(ctx, partials);
+      return this.c.compile(text, this.options).render(cx, partials);
     },
 
     // template result buffering
-    b: (useArrayBuffer) ? function(s) { this.buf.push(s); } :
-                          function(s) { this.buf += s; },
+    b: function(s) { this.buf += s; },
 
-    fl: (useArrayBuffer) ? function() { var r = this.buf.join(''); this.buf = []; return r; } :
-                           function() { var r = this.buf; this.buf = ''; return r; },
-    // init the buffer
-    ib: function () {
-      this.buf = (useArrayBuffer) ? [] : '';
-    },
+    fl: function() { var r = this.buf; this.buf = ''; return r; },
 
     // method replace section
-    ms: function(func, ctx, partials, start, end, tags) {
-      var textSource = (this.activeSub && this.subsText[this.activeSub]) ? this.subsText[this.activeSub] : this.text;
-      return this.ls(func, ctx, partials, textSource.substring(start, end), tags);
+    ms: function(func, ctx, partials, inverted, start, end, tags) {
+      var textSource,
+          cx = ctx[ctx.length - 1],
+          result = func.call(cx);
+
+      if (typeof result == 'function') {
+        if (inverted) {
+          return true;
+        } else {
+          textSource = (this.activeSub && this.subsText && this.subsText[this.activeSub]) ? this.subsText[this.activeSub] : this.text;
+          return this.ls(result, cx, partials, textSource.substring(start, end), tags);
+        }
+      }
+
+      return result;
     },
 
     // method replace variable
     mv: function(func, ctx, partials) {
       var cx = ctx[ctx.length - 1];
-      return this.ct(coerceToString(func.call(cx)), ctx, partials);
+      var result = func.call(cx);
+
+      if (typeof result == 'function') {
+        return this.ct(coerceToString(result.call(cx)), cx, partials);
+      }
+
+      return result;
     },
 
     sub: function(name, context, partials, indent) {
@@ -729,7 +709,25 @@ var Hogan = {};
 
   };
 
-  function createSpecializedPartial(instance, subs, partials, childText) {
+  //Find a key in an object
+  function findInScope(key, scope, doModelGet) {
+    var val;
+
+    if (scope && typeof scope == 'object') {
+
+      if (scope[key] !== undefined) {
+        val = scope[key];
+
+      // try lookup with get for backbone or similar model data
+      } else if (doModelGet && scope.get && typeof scope.get == 'function') {
+        val = scope.get(key);
+      }
+    }
+
+    return val;
+  }
+
+  function createSpecializedPartial(instance, subs, partials, stackSubs, stackPartials, stackText) {
     function PartialTemplate() {};
     PartialTemplate.prototype = instance;
     function Substitutions() {};
@@ -738,15 +736,25 @@ var Hogan = {};
     var partial = new PartialTemplate();
     partial.subs = new Substitutions();
     partial.subsText = {};  //hehe. substext.
-    partial.ib();
+    partial.buf = '';
 
+    stackSubs = stackSubs || {};
+    partial.stackSubs = stackSubs;
+    partial.subsText = stackText;
     for (key in subs) {
-      partial.subs[key] = subs[key];
-      partial.subsText[key] = childText;
+      if (!stackSubs[key]) stackSubs[key] = subs[key];
+    }
+    for (key in stackSubs) {
+      partial.subs[key] = stackSubs[key];
     }
 
+    stackPartials = stackPartials || {};
+    partial.stackPartials = stackPartials;
     for (key in partials) {
-      partial.partials[key] = partials[key];
+      if (!stackPartials[key]) stackPartials[key] = partials[key];
+    }
+    for (key in stackPartials) {
+      partial.partials[key] = stackPartials[key];
     }
 
     return partial;
@@ -757,7 +765,6 @@ var Hogan = {};
       rGt = />/g,
       rApos = /\'/g,
       rQuot = /\"/g,
-      rPipe = /\s*\|\s*/g,
       hChars = /[&<>\"\']/;
 
   function coerceToString(val) {
@@ -787,6 +794,6 @@ var test = require("./test.mustache");
 console.log(test({foo:"If this shows up, the test works!"}));
 
 },{"./test.mustache":5}],5:[function(require,module,exports){
-var hogan = require("techhead-hogan");var n = new hogan.Template({code: function (c,p,i) { var t=this;t.b(i=i||"");t.b(t.v(t.f("foo",c,p,0)));t.b("\n");return t.fl(); },partials: {}, subs: {  }});module.exports = function(data, partials) {return n.render(data, partials)}
-},{"techhead-hogan":2}]},{},[4])
+var hogan = require("hogan.js");var n = new hogan.Template({code: function (c,p,i) { var t=this;t.b(i=i||"");t.b(t.v(t.f("foo",c,p,0)));t.b("\n");return t.fl(); },partials: {}, subs: {  }});module.exports = function(data, partials) {return n.render(data, partials)}
+},{"hogan.js":2}]},{},[4])
 ;

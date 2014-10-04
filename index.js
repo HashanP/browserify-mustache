@@ -1,10 +1,10 @@
 var through = require("through");
-var hogan = require("techhead-hogan");
+var hogan = require("hogan.js");
 
 var filenamePattern = /\.(html|hogan|hg|mustache|ms)$/;
 
 function wrap(template) {
-	return "var hogan = require(\"techhead-hogan\");" +
+	return "var hogan = require(\"hogan.js\");" +
 		"var n = new hogan.Template(" + template + ");" +
 		"module.exports = function(data, partials) {" + 
 		"return n.render(data, partials)" +
