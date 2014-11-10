@@ -12,6 +12,10 @@
     "transform",
     "browserify-transform"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:TheMuses/browserify-mustache.git"
+  },
   "author": "Hashan Punchihewa <hashan.punchihewa@gmail.com>",
   "license": "BSD-2-Clause",
   "peerDependencies": {
