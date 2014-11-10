@@ -1,6 +1,6 @@
 {
   "name": "browserify-mustache",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Browserify transform plugin for mustache templates",
   "main": "index.js",
   "scripts": {
