@@ -1,6 +1,6 @@
 {
   "name": "browserify-mustache",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Browserify transform plugin for mustache templates",
   "main": "index.js",
   "scripts": {
@@ -14,7 +14,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git@github.com:TheMuses/browserify-mustache.git"
+    "url": "git@github.com:HashanP/browserify-mustache.git"
   },
   "author": "Hashan Punchihewa <hashan.punchihewa@gmail.com>",
   "license": "BSD-2-Clause",
